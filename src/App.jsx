@@ -1,35 +1,50 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { complete, parseJsonObject } from './lib/claude';
+import { account, pricing, usageHistory, cohort } from './data/account';
+import {
+  summarize,
+  formatMoney,
+  round1,
+  cycleCost,
+  savingsPerCycle,
+  addWeeks,
+  formatDate,
+  formatDateLong,
+} from './lib/calc';
+
+/* ─── Derived figures — single source of truth for the whole page ──────────── */
+const S = summarize(account, pricing, usageHistory);
 
 /* ─── AI recommendation prompt ────────────────────────────────────────────── */
 const AI_SYSTEM = `You write microcopy for "Right-Size MyOrder", a feature inside a water-delivery app that gently helps customers match their subscription to what they actually use — saving money and cutting waste. Voice: warm, honest, calm, quietly confident — never pushy or salesy. Never fabricate numbers; use only the figures provided.`;
 
-const AI_USER = `A customer's recent water consumption (gallons per 4-week delivery cycle) was: Aug 12.8, Sep 11.5, Oct 11.0 — a gentle downward trend, averaging about 12 gallons. Their current plan delivers 15 gallons per cycle, so they are accumulating roughly 8 surplus gallons per quarter. Water costs about $8 per gallon.
+const RECENT_USAGE = usageHistory
+  .slice(-3)
+  .map((m) => `${m.month} ${m.consumed}`)
+  .join(', ');
+
+const AI_USER = `A customer's recent water consumption (gallons per 4-week delivery cycle) was: ${RECENT_USAGE} — a gentle downward trend, averaging about ${round1(S.avgConsumption)} gallons. Their current plan delivers ${S.current} gallons per cycle, so they are accumulating roughly ${round1(S.surplusQuarter)} surplus gallons per quarter. Water in their plan costs about ${formatMoney(S.pricePerGallon)} per gallon.
 
 Return ONLY a JSON object (no markdown fences, no preamble, no trailing prose) with exactly this shape:
-{ "headline": "<max 8 words, sentence case, a gentle observation that their order is a bit larger than they need>", "body": "<max 50 words, plain text, reference the ~12 gal actual usage vs the 15 gal plan and the small surplus quietly building up; warm and non-pushy; no exclamation marks>" }`;
+{ "headline": "<max 8 words, sentence case, a gentle observation that their order is a bit larger than they need>", "body": "<max 50 words, plain text, reference the ~${round1(S.avgConsumption)} gal actual usage vs the ${S.current} gal plan and the small surplus quietly building up; warm and non-pushy; no exclamation marks>" }`;
 
 /* ─── Global CSS ──────────────────────────────────────────────────────────── */
 const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600;9..144,700;9..144,900&family=Inter:wght@300;400;500;600&display=swap');
 
 :root {
-  --bg:#f7f4ef; --text:#1c2b3a; --accent:#e8a020; --accent-lt:#fdf3e0;
-  --green:#3dbb7a; --green-lt:#e6f9f0; --card:#fff; --border:#e4ddd3; --muted:#7a8a99;
+  --bg:#f8f9fb; --text:#1c2b3a; --accent:#e8a020; --accent-lt:#fdf3e0;
+  --green:#3dbb7a; --green-lt:#e6f9f0; --card:#fff; --border:#e6e8ec; --muted:#64748b;
 }
 .serif{font-family:'Fraunces',serif;} .sans{font-family:'Inter',sans-serif;}
 
 /* ── Core animations ── */
 @keyframes draw-ecg   {0%{stroke-dashoffset:320}100%{stroke-dashoffset:0}}
-@keyframes drop-float {0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
-@keyframes drop-glow  {0%,100%{filter:drop-shadow(0 0 4px rgba(232,160,32,.3))}50%{filter:drop-shadow(0 0 14px rgba(232,160,32,.75))}}
+@keyframes drop-float {0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
 @keyframes fade-up    {from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-@keyframes rec-glow   {0%,100%{box-shadow:0 0 0 0 rgba(232,160,32,.12),0 8px 32px rgba(28,43,58,.07)}50%{box-shadow:0 0 0 8px rgba(232,160,32,.07),0 8px 40px rgba(232,160,32,.2)}}
 @keyframes flip-card  {0%{transform:perspective(900px) rotateY(0deg);opacity:1}45%{transform:perspective(900px) rotateY(88deg);opacity:0}55%{transform:perspective(900px) rotateY(-88deg);opacity:0}100%{transform:perspective(900px) rotateY(0deg);opacity:1}}
-@keyframes confetti-burst{0%{transform:translate(0,0) rotate(0deg) scale(1);opacity:1}100%{transform:translate(var(--tx),var(--ty)) rotate(var(--rot)) scale(.4);opacity:0}}
 @keyframes toast-in   {from{opacity:0;transform:translateX(-50%) translateY(14px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 @keyframes shimmer-in {from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
-@keyframes alert-pulse{0%,100%{background-color:rgba(232,160,32,.1)}50%{background-color:rgba(232,160,32,.2)}}
 @keyframes tab-data-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
 /* ── Modal / drawer ── */
@@ -37,15 +52,13 @@ const GLOBAL_CSS = `
 @keyframes modal-in    {from{opacity:0;transform:scale(.93) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
 @keyframes drawer-up   {from{transform:translateY(100%)}to{transform:translateY(0)}}
 
-.rec-card-pulse{animation:rec-glow 3.2s ease-in-out infinite;}
 .rec-card-flip {animation:flip-card .65s ease-in-out forwards;}
-.drop-float    {animation:drop-float 2.8s ease-in-out infinite,drop-glow 2.8s ease-in-out infinite;}
-.alert-pulse   {animation:alert-pulse 2.6s ease-in-out infinite;}
+.drop-float    {animation:drop-float 4.5s ease-in-out infinite;}
 
 /* ── Range slider ── */
 input[type='range'].plan-slider{
   -webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:3px;outline:none;cursor:pointer;
-  background:linear-gradient(to right,#e8a020 0%,#e8a020 var(--sp,40%),#e4ddd3 var(--sp,40%),#e4ddd3 100%);
+  background:linear-gradient(to right,#e8a020 0%,#e8a020 var(--sp,40%),#e6e8ec var(--sp,40%),#e6e8ec 100%);
 }
 input[type='range'].plan-slider::-webkit-slider-thumb{
   -webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#e8a020;
@@ -58,7 +71,7 @@ input[type='range'].plan-slider::-moz-range-thumb{
 }
 
 /* ── Toggle switch ── */
-.tog-track{position:relative;width:44px;height:24px;border-radius:12px;background:#e4ddd3;transition:background .25s;flex-shrink:0;cursor:pointer;}
+.tog-track{position:relative;width:44px;height:24px;border-radius:12px;background:#e6e8ec;transition:background .25s;flex-shrink:0;cursor:pointer;}
 .tog-track.on{background:#3dbb7a;}
 .tog-thumb{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .25s cubic-bezier(.34,1.4,.64,1);box-shadow:0 1px 4px rgba(0,0,0,.18);}
 .tog-track.on .tog-thumb{left:23px;}
@@ -69,23 +82,14 @@ input[type='range'].plan-slider::-moz-range-thumb{
 .expand-panel.open  {max-height:200px;opacity:1;}
 `;
 
-/* ─── Data ───────────────────────────────────────────────────────────────── */
-const CHART_ALL = [
-  {month:'Nov',delivered:15,consumed:12.8},{month:'Dec',delivered:15,consumed:12.0},
-  {month:'Jan',delivered:15,consumed:12.5},{month:'Feb',delivered:15,consumed:13.0},
-  {month:'Mar',delivered:15,consumed:13.5},{month:'Apr',delivered:15,consumed:13.8},
-  {month:'May',delivered:15,consumed:14.2},{month:'Jun',delivered:15,consumed:14.8},
-  {month:'Jul',delivered:15,consumed:14.1},{month:'Aug',delivered:15,consumed:12.8},
-  {month:'Sep',delivered:15,consumed:11.5},{month:'Oct',delivered:15,consumed:11.0},
-];
-const RANGES = {'3M':CHART_ALL.slice(9),'6M':CHART_ALL.slice(6),'12M':CHART_ALL};
-
-const COHORT_PEERS = [
-  {id:1,icon:'🏡',label:'Household A',used:10.5,plan:12,status:'matched',trend:[10.8,10.2,10.5],desc:'Right-sized 6 months ago. Stable. Churn risk: low.'},
-  {id:2,icon:'🏘️',label:'Household B',used:13.0,plan:15,status:'surplus',trend:[12.5,13.2,13.0],desc:'Slight surplus 2 months running. Suggestion pending.'},
-  {id:3,icon:'🏗️',label:'Household C',used:11.8,plan:12,status:'matched',trend:[11.5,12.0,11.8],desc:'Well-matched since spring. No action needed.'},
-  {id:0,icon:'🏠',label:'You',        used:11,  plan:15,status:'you',    trend:[12.8,11.5,11.0],desc:'Surplus growing month-over-month. Recommendation active.'},
-];
+/* ─── Chart data — the 12-cycle delivered-vs-consumed history ──────────────── */
+const CHART_ALL = usageHistory;
+const RANGES = {
+  '3M': CHART_ALL.slice(-3),
+  '6M': CHART_ALL.slice(-6),
+  '12M': CHART_ALL,
+};
+const RECENT_MONTHS = usageHistory.slice(-3).map((m) => m.month);
 
 /* ─── Hooks ──────────────────────────────────────────────────────────────── */
 function useInView(threshold=0.2){
@@ -121,10 +125,10 @@ function CountUp({target,suffix='',duration=1100,inView}){
 function Toggle({on,onToggle,label,sub}){
   return(
     <div onClick={onToggle} role="switch" aria-checked={on}
-      style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 0',borderBottom:'1px solid #e4ddd3',cursor:'pointer',userSelect:'none'}}>
+      style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 0',borderBottom:'1px solid #e6e8ec',cursor:'pointer',userSelect:'none'}}>
       <div>
         <p className="sans" style={{fontSize:14,fontWeight:600,color:'#1c2b3a'}}>{label}</p>
-        {sub&&<p className="sans" style={{fontSize:12,color:'#aab4be',marginTop:1}}>{sub}</p>}
+        {sub&&<p className="sans" style={{fontSize:12,color:'#94a3b8',marginTop:1}}>{sub}</p>}
       </div>
       <div className={`tog-track${on?' on':''}`}><div className="tog-thumb"/></div>
     </div>
@@ -177,7 +181,7 @@ function BarChart({inView,data}){
           fontSize:12,fontFamily:'Inter,sans-serif',pointerEvents:'none',zIndex:20,
           whiteSpace:'nowrap',boxShadow:'0 6px 20px rgba(28,43,58,.25)',
         }}>
-          <p style={{fontWeight:700,marginBottom:4,color:'#f7f4ef'}}>{tip.d.month}</p>
+          <p style={{fontWeight:700,marginBottom:4,color:'#f8f9fb'}}>{tip.d.month}</p>
           <p style={{color:'#c8d9e8',marginBottom:2}}>Delivered: <strong>{tip.d.delivered} gal</strong></p>
           <p style={{color:'#e8a020',marginBottom:2}}>Consumed: <strong>{tip.d.consumed} gal</strong></p>
           <p style={{color:'#3dbb7a'}}>Surplus: <strong>{(tip.d.delivered-tip.d.consumed).toFixed(1)} gal</strong></p>
@@ -187,8 +191,8 @@ function BarChart({inView,data}){
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{maxWidth:W,display:'block',margin:'0 auto'}}>
         {ticks.map(t=>(
           <g key={t}>
-            <line x1={pad.l} y1={y(t)} x2={W-pad.r} y2={y(t)} stroke="#e4ddd3" strokeWidth="1"/>
-            <text x={pad.l-5} y={y(t)+4} fontSize="9" fill="#aab4be" textAnchor="end">{t}</text>
+            <line x1={pad.l} y1={y(t)} x2={W-pad.r} y2={y(t)} stroke="#e6e8ec" strokeWidth="1"/>
+            <text x={pad.l-5} y={y(t)+4} fontSize="9" fill="#94a3b8" textAnchor="end">{t}</text>
           </g>
         ))}
         {data.map((d,i)=>{
@@ -203,7 +207,7 @@ function BarChart({inView,data}){
                 style={{transformOrigin:`${cx}px ${y(0)}px`,transform:inView?'scaleY(1)':'scaleY(0)',transition:`transform .6s cubic-bezier(.34,1.4,.64,1) ${delay+.05}s`}}/>
               {/* Hover hit area */}
               <rect x={cx-gW/2} y={pad.t} width={gW} height={cH} fill="transparent"/>
-              <text x={cx} y={H-pad.b+14} fontSize="10" fill="#aab4be" textAnchor="middle">{d.month}</text>
+              <text x={cx} y={H-pad.b+14} fontSize="10" fill="#94a3b8" textAnchor="middle">{d.month}</text>
             </g>
           );
         })}
@@ -214,9 +218,9 @@ function BarChart({inView,data}){
           </g>
         )}
         <rect x={pad.l} y={H-10} width={10} height={8} rx="2" fill="#c8d9e8"/>
-        <text x={pad.l+13} y={H-3} fontSize="9" fill="#aab4be">Delivered</text>
+        <text x={pad.l+13} y={H-3} fontSize="9" fill="#94a3b8">Delivered</text>
         <rect x={pad.l+66} y={H-10} width={10} height={8} rx="2" fill="#3dbb7a" opacity=".8"/>
-        <text x={pad.l+79} y={H-3} fontSize="9" fill="#aab4be">Consumed</text>
+        <text x={pad.l+79} y={H-3} fontSize="9" fill="#94a3b8">Consumed</text>
       </svg>
     </div>
   );
@@ -226,30 +230,31 @@ function BarChart({inView,data}){
 function PlanSlider({value,onChange}){
   const MIN=8,MAX=20;
   const pct=((value-MIN)/(MAX-MIN))*100;
-  const savings=(15-value)*8;
-  const newCost=72-savings;
+  const recPct=((S.recommended-MIN)/(MAX-MIN))*100;
+  const savings=savingsPerCycle(S.current,value,pricing);   // signed $ / cycle
+  const newCost=cycleCost(value,pricing);
   return(
     <div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',marginBottom:20}}>
         <div>
-          <p className="sans" style={{fontSize:11,color:'#aab4be',marginBottom:3}}>Selected plan</p>
+          <p className="sans" style={{fontSize:11,color:'#94a3b8',marginBottom:3}}>Selected plan</p>
           <p className="serif" style={{fontSize:32,fontWeight:700,color:'#1c2b3a',lineHeight:1}}>
-            {value} <span style={{fontSize:14,fontWeight:400,color:'#7a8a99'}}>gal / 4 wks</span>
+            {value} <span style={{fontSize:14,fontWeight:400,color:'#64748b'}}>gal / 4 wks</span>
           </p>
-          <p className="sans" style={{fontSize:12,color:'#aab4be',marginTop:3}}>≈ ${newCost}/month</p>
+          <p className="sans" style={{fontSize:12,color:'#94a3b8',marginTop:3}}>≈ {formatMoney(newCost)}/month</p>
         </div>
         <div style={{textAlign:'right'}}>
           {savings>0&&(<>
             <p className="sans" style={{fontSize:11,color:'#3dbb7a',marginBottom:3}}>Monthly savings</p>
-            <p className="serif" style={{fontSize:26,fontWeight:700,color:'#3dbb7a',lineHeight:1}}>${savings}/mo</p>
+            <p className="serif" style={{fontSize:26,fontWeight:700,color:'#3dbb7a',lineHeight:1}}>{formatMoney(savings)}/mo</p>
           </>)}
           {savings<0&&(<>
             <p className="sans" style={{fontSize:11,color:'#d05020',marginBottom:3}}>Extra cost</p>
-            <p className="serif" style={{fontSize:26,fontWeight:700,color:'#d05020',lineHeight:1}}>+${-savings}/mo</p>
+            <p className="serif" style={{fontSize:26,fontWeight:700,color:'#d05020',lineHeight:1}}>+{formatMoney(-savings)}/mo</p>
           </>)}
           {savings===0&&(<>
-            <p className="sans" style={{fontSize:11,color:'#aab4be',marginBottom:3}}>Current plan</p>
-            <p className="serif" style={{fontSize:26,fontWeight:700,color:'#1c2b3a',lineHeight:1}}>$72/mo</p>
+            <p className="sans" style={{fontSize:11,color:'#94a3b8',marginBottom:3}}>Current plan</p>
+            <p className="serif" style={{fontSize:26,fontWeight:700,color:'#1c2b3a',lineHeight:1}}>{formatMoney(S.currentCost)}/mo</p>
           </>)}
         </div>
       </div>
@@ -259,14 +264,14 @@ function PlanSlider({value,onChange}){
         {/* Recommended label */}
         <div style={{
           position:'absolute',top:0,
-          left:`${((12-MIN)/(MAX-MIN))*100}%`,
+          left:`${recPct}%`,
           transform:'translateX(-50%)',
           display:'flex',flexDirection:'column',alignItems:'center',
         }}>
           <span className="sans" style={{
             fontSize:9,fontWeight:700,
-            background:value===12?'#e8a020':'rgba(232,160,32,0.25)',
-            color:value===12?'#fff':'#e8a020',
+            background:value===S.recommended?'#e8a020':'rgba(232,160,32,0.25)',
+            color:value===S.recommended?'#fff':'#e8a020',
             padding:'2px 7px',borderRadius:4,whiteSpace:'nowrap',
             transition:'background .25s,color .25s',
           }}>★ Recommended</span>
@@ -282,31 +287,10 @@ function PlanSlider({value,onChange}){
       </div>
 
       <div style={{display:'flex',justifyContent:'space-between',marginTop:4}}>
-        <span className="sans" style={{fontSize:10,color:'#c8d4dc'}}>{MIN} gal</span>
-        <span className="sans" style={{fontSize:10,color:'#c8d4dc'}}>Current: 15 gal</span>
-        <span className="sans" style={{fontSize:10,color:'#c8d4dc'}}>{MAX} gal</span>
+        <span className="sans" style={{fontSize:10,color:'#cbd5e1'}}>{MIN} gal</span>
+        <span className="sans" style={{fontSize:10,color:'#cbd5e1'}}>Current: {S.current} gal</span>
+        <span className="sans" style={{fontSize:10,color:'#cbd5e1'}}>{MAX} gal</span>
       </div>
-    </div>
-  );
-}
-
-/* ─── Confetti ───────────────────────────────────────────────────────────── */
-function Confetti({active}){
-  if(!active) return null;
-  const colors=['#e8a020','#3dbb7a','#1c2b3a','#f7c56e','#a8dfc0','#f4d03f'];
-  return(
-    <div style={{position:'absolute',top:'45%',left:'50%',pointerEvents:'none',zIndex:20}}>
-      {Array.from({length:32},(_,i)=>{
-        const a=(i/32)*360,dist=55+Math.random()*70;
-        const tx=Math.cos(a*Math.PI/180)*dist,ty=Math.sin(a*Math.PI/180)*dist-30;
-        const rot=Math.random()*720-360,sz=5+Math.random()*7,delay=Math.random()*.18;
-        return(<div key={i} style={{
-          position:'absolute',width:i%3===0?sz:sz*.65,height:i%3===0?sz:sz*1.6,
-          borderRadius:i%3===0?'50%':3,background:colors[i%colors.length],
-          '--tx':`${tx}px`,'--ty':`${ty}px`,'--rot':`${rot}deg`,
-          animation:`confetti-burst .95s cubic-bezier(.22,1,.36,1) ${delay}s both`,
-        }}/>);
-      })}
     </div>
   );
 }
@@ -318,7 +302,7 @@ function Toast({msg,visible,dismiss}){
   return(
     <div role="status" style={{
       position:'fixed',bottom:28,left:'50%',transform:'translateX(-50%)',zIndex:9999,
-      background:'#1c2b3a',color:'#f7f4ef',padding:'13px 22px',borderRadius:14,
+      background:'#1c2b3a',color:'#f8f9fb',padding:'13px 22px',borderRadius:14,
       fontSize:14,fontFamily:'Inter,sans-serif',fontWeight:500,
       boxShadow:'0 8px 32px rgba(28,43,58,.25)',whiteSpace:'nowrap',
       animation:'toast-in .35s ease forwards',
@@ -363,12 +347,12 @@ function NotifDrawer({open,onClose}){
       }}>
         {/* Handle */}
         <div style={{display:'flex',justifyContent:'center',padding:'12px 0 4px'}}>
-          <div style={{width:40,height:4,borderRadius:2,background:'#e4ddd3'}}/>
+          <div style={{width:40,height:4,borderRadius:2,background:'#e6e8ec'}}/>
         </div>
         <div style={{padding:'10px 24px 36px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
             <h3 className="serif" style={{fontSize:22,fontWeight:700,color:'#1c2b3a'}}>Notification Preferences</h3>
-            <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:'#aab4be',lineHeight:1}}>✕</button>
+            <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:'#94a3b8',lineHeight:1}}>✕</button>
           </div>
 
           <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.12em',color:'#e8a020',marginBottom:4}}>Channels</p>
@@ -381,13 +365,13 @@ function NotifDrawer({open,onClose}){
             <div key={opt.val} onClick={()=>setFreq(opt.val)} style={{
               display:'flex',gap:12,alignItems:'flex-start',
               padding:'12px 14px',borderRadius:13,marginBottom:8,cursor:'pointer',
-              background:freq===opt.val?'#fdf3e0':'#f7f4ef',
+              background:freq===opt.val?'#fdf3e0':'#f8f9fb',
               border:`1.5px solid ${freq===opt.val?'rgba(232,160,32,.45)':'transparent'}`,
               transition:'all .2s',
             }}>
               <div style={{
                 width:18,height:18,borderRadius:'50%',flexShrink:0,marginTop:1,
-                border:`2px solid ${freq===opt.val?'#e8a020':'#c8d4dc'}`,
+                border:`2px solid ${freq===opt.val?'#e8a020':'#cbd5e1'}`,
                 background:freq===opt.val?'#e8a020':'transparent',
                 display:'flex',alignItems:'center',justifyContent:'center',transition:'all .2s',
               }}>
@@ -395,7 +379,7 @@ function NotifDrawer({open,onClose}){
               </div>
               <div>
                 <p className="sans" style={{fontSize:14,fontWeight:600,color:'#1c2b3a'}}>{opt.label}</p>
-                <p className="sans" style={{fontSize:12,color:'#7a8a99',marginTop:1}}>{opt.sub}</p>
+                <p className="sans" style={{fontSize:12,color:'#64748b',marginTop:1}}>{opt.sub}</p>
               </div>
             </div>
           ))}
@@ -416,6 +400,8 @@ function NotifDrawer({open,onClose}){
 /* ─── Skip Delivery Modal ────────────────────────────────────────────────── */
 function SkipModal({open,onClose}){
   const [done,setDone]=useState(false);
+  const skipDate=formatDateLong(account.nextDeliveryDate);
+  const nextDate=formatDateLong(addWeeks(account.nextDeliveryDate,account.cycleWeeks));
   useEffect(()=>{ if(!open) setTimeout(()=>setDone(false),400); },[open]);
   if(!open) return null;
   return(
@@ -429,23 +415,27 @@ function SkipModal({open,onClose}){
       }}>
         {done?(
           <div style={{textAlign:'center',padding:'8px 0'}}>
-            <div style={{fontSize:44,marginBottom:12}}>✅</div>
+            <div style={{width:52,height:52,borderRadius:'50%',background:'#3dbb7a',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </div>
             <h3 className="serif" style={{fontSize:22,fontWeight:700,color:'#1c2b3a',marginBottom:8}}>Delivery Skipped</h3>
-            <p className="sans" style={{fontSize:14,color:'#7a8a99',lineHeight:1.7}}>
-              November 8 delivery cancelled.<br/>Next delivery: <strong>December 6</strong>.
+            <p className="sans" style={{fontSize:14,color:'#64748b',lineHeight:1.7}}>
+              {skipDate} delivery cancelled.<br/>Next delivery: <strong>{nextDate}</strong>.
             </p>
-            <button onClick={onClose} className="sans" style={{marginTop:20,background:'#f7f4ef',border:'1.5px solid #e4ddd3',borderRadius:12,padding:'10px 24px',fontSize:14,cursor:'pointer',fontWeight:500}}>Done</button>
+            <button onClick={onClose} className="sans" style={{marginTop:20,background:'#f8f9fb',border:'1.5px solid #e6e8ec',borderRadius:12,padding:'10px 24px',fontSize:14,cursor:'pointer',fontWeight:500}}>Done</button>
           </div>
         ):(
           <>
-            <div style={{fontSize:36,marginBottom:12}}>📦</div>
-            <h3 className="serif" style={{fontSize:22,fontWeight:700,color:'#1c2b3a',marginBottom:8}}>Skip November 8?</h3>
-            <p className="sans" style={{fontSize:14,color:'#7a8a99',lineHeight:1.72,marginBottom:20}}>
-              Your next delivery would be <strong>December 6</strong>. You won't be charged for the skipped delivery.
+            <div style={{width:46,height:46,borderRadius:12,background:'#fdf3e0',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14}}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 7l9-4 9 4v10l-9 4-9-4V7z" stroke="#e8a020" strokeWidth="1.8" strokeLinejoin="round"/><path d="M3 7l9 4 9-4M12 11v10" stroke="#e8a020" strokeWidth="1.8" strokeLinejoin="round"/></svg>
+            </div>
+            <h3 className="serif" style={{fontSize:22,fontWeight:700,color:'#1c2b3a',marginBottom:8}}>Skip {skipDate}?</h3>
+            <p className="sans" style={{fontSize:14,color:'#64748b',lineHeight:1.72,marginBottom:20}}>
+              Your next delivery would be <strong>{nextDate}</strong>. You won't be charged for the skipped delivery.
             </p>
             <div style={{display:'flex',gap:10}}>
               <button onClick={()=>setDone(true)} className="sans" style={{flex:1,background:'#1c2b3a',color:'#fff',border:'none',borderRadius:12,padding:'12px',fontSize:14,fontWeight:600,cursor:'pointer'}}>Confirm Skip</button>
-              <button onClick={onClose} className="sans" style={{flex:1,background:'transparent',border:'1.5px solid #e4ddd3',borderRadius:12,padding:'12px',fontSize:14,cursor:'pointer',color:'#7a8a99'}}>Cancel</button>
+              <button onClick={onClose} className="sans" style={{flex:1,background:'transparent',border:'1.5px solid #e6e8ec',borderRadius:12,padding:'12px',fontSize:14,cursor:'pointer',color:'#64748b'}}>Cancel</button>
             </div>
           </>
         )}
@@ -474,31 +464,31 @@ function PhaseModal({open,onClose,onScrollToRec}){
       }}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:18}}>
           <div>
-            <span className="sans" style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.12em',color:'#c8d4dc'}}>Phase 3 · Locked</span>
+            <span className="sans" style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.12em',color:'#cbd5e1'}}>Phase 3 · Locked</span>
             <h3 className="serif" style={{fontSize:24,fontWeight:700,color:'#1c2b3a',marginTop:4}}>Unlock Autopilot</h3>
           </div>
-          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:18,color:'#c8d4dc',lineHeight:1}}>✕</button>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:18,color:'#cbd5e1',lineHeight:1}}>✕</button>
         </div>
 
         {/* Progress bar */}
-        <div style={{background:'#f7f4ef',borderRadius:14,padding:'16px 18px',marginBottom:20}}>
+        <div style={{background:'#f8f9fb',borderRadius:14,padding:'16px 18px',marginBottom:20}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
             <p className="sans" style={{fontSize:13,fontWeight:600,color:'#1c2b3a'}}>Suggestions accepted</p>
             <p className="sans" style={{fontSize:13,fontWeight:700,color:'#e8a020'}}>1 / 2</p>
           </div>
-          <div style={{height:8,background:'#e4ddd3',borderRadius:4,overflow:'hidden'}}>
+          <div style={{height:8,background:'#e6e8ec',borderRadius:4,overflow:'hidden'}}>
             <div style={{width:'50%',height:'100%',background:'#e8a020',borderRadius:4,transition:'width .8s ease'}}/>
           </div>
-          <p className="sans" style={{fontSize:12,color:'#aab4be',marginTop:8}}>Accept 1 more suggestion to unlock.</p>
+          <p className="sans" style={{fontSize:12,color:'#94a3b8',marginTop:8}}>Accept 1 more suggestion to unlock.</p>
         </div>
 
-        <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em',color:'#aab4be',marginBottom:10}}>What you get</p>
+        <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em',color:'#94a3b8',marginBottom:10}}>What you get</p>
         {perks.map((p,i)=>(
           <div key={i} style={{display:'flex',gap:10,alignItems:'center',marginBottom:10}}>
             <div style={{width:20,height:20,borderRadius:'50%',background:'#fdf3e0',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="#e8a020" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </div>
-            <p className="sans" style={{fontSize:13,color:'#4a5a6a'}}>{p}</p>
+            <p className="sans" style={{fontSize:13,color:'#475569'}}>{p}</p>
           </div>
         ))}
 
@@ -506,7 +496,7 @@ function PhaseModal({open,onClose,onScrollToRec}){
           <button onClick={()=>{onClose();onScrollToRec();}} className="sans" style={{flex:1,background:'#e8a020',color:'#fff',border:'none',borderRadius:14,padding:'13px',fontSize:14,fontWeight:600,cursor:'pointer'}}>
             Accept Today's Suggestion
           </button>
-          <button onClick={onClose} className="sans" style={{background:'transparent',border:'1.5px solid #e4ddd3',borderRadius:14,padding:'13px 16px',fontSize:14,cursor:'pointer',color:'#7a8a99'}}>
+          <button onClick={onClose} className="sans" style={{background:'transparent',border:'1.5px solid #e6e8ec',borderRadius:14,padding:'13px 16px',fontSize:14,cursor:'pointer',color:'#64748b'}}>
             Later
           </button>
         </div>
@@ -522,17 +512,21 @@ function HeroSection({onScrollToRec}){
       <div style={{display:'flex',justifyContent:'center',marginBottom:32}}>
         <svg className="drop-float" width="110" height="78" viewBox="0 0 110 78" fill="none">
           <path d="M55 8C55 8 26 44 26 56C26 72 39 76 55 76C71 76 84 72 84 56C84 44 55 8 55 8Z" fill="rgba(232,160,32,.13)" stroke="#e8a020" strokeWidth="2"/>
-          <polyline points="29,55 36,55 43,36 50,66 56,47 61,47 67,55 80,55" fill="none" stroke="#e8a020" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="320" style={{animation:'draw-ecg 2.4s ease-in-out infinite alternate'}}/>
+          <polyline points="29,55 36,55 43,36 50,66 56,47 61,47 67,55 80,55" fill="none" stroke="#e8a020" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="320" style={{animation:'draw-ecg 1.8s ease-out forwards'}}/>
         </svg>
       </div>
       <h1 className="serif" style={{fontSize:'clamp(28px,5.5vw,50px)',fontWeight:700,color:'#1c2b3a',lineHeight:1.15,marginBottom:14}}>
-        Welcome back, Marcus.<br/><span style={{color:'#e8a020'}}>Your water, dialed in.</span>
+        Welcome back, {account.greetingName}.<br/><span style={{color:'#e8a020'}}>Your water, dialed in.</span>
       </h1>
-      <p className="sans" style={{fontSize:16,color:'#7a8a99',marginBottom:36}}>We've been learning your rhythm. Here's what we know.</p>
-      <div className="alert-pulse" role="button" tabIndex={0} onClick={onScrollToRec} onKeyDown={e=>e.key==='Enter'&&onScrollToRec()}
-        style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,padding:'14px 22px',borderRadius:16,cursor:'pointer',border:'1.5px solid rgba(232,160,32,.45)',maxWidth:540,margin:'0 auto'}}>
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <span style={{fontSize:20}}>⚡</span>
+      <p className="sans" style={{fontSize:16,color:'#64748b',marginBottom:36}}>We've been learning your rhythm. Here's what we know.</p>
+      <div role="button" tabIndex={0} onClick={onScrollToRec} onKeyDown={e=>e.key==='Enter'&&onScrollToRec()}
+        style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,padding:'14px 20px',borderRadius:14,cursor:'pointer',background:'#fff',border:'1px solid #e6e8ec',boxShadow:'0 1px 3px rgba(28,43,58,.05)',maxWidth:540,margin:'0 auto',transition:'border-color .2s,box-shadow .2s,transform .2s'}}
+        onMouseEnter={e=>{e.currentTarget.style.borderColor='rgba(232,160,32,.5)';e.currentTarget.style.boxShadow='0 4px 14px rgba(232,160,32,.12)';e.currentTarget.style.transform='translateY(-1px)';}}
+        onMouseLeave={e=>{e.currentTarget.style.borderColor='#e6e8ec';e.currentTarget.style.boxShadow='0 1px 3px rgba(28,43,58,.05)';e.currentTarget.style.transform='';}}>
+        <div style={{display:'flex',alignItems:'center',gap:11}}>
+          <span style={{display:'grid',placeItems:'center',width:28,height:28,borderRadius:8,background:'#fdf3e0',flexShrink:0}}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2l2.2 6.2L20 10l-5.8 1.8L12 18l-2.2-6.2L4 10l5.8-1.8L12 2z" fill="#e8a020"/></svg>
+          </span>
           <span className="sans" style={{fontSize:15,fontWeight:600,color:'#1c2b3a'}}>We have a recommendation for you</span>
         </div>
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10l6 6 6-6" stroke="#e8a020" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -550,9 +544,9 @@ function UsageSection(){
   const switchRange=r=>{ setRange(r); setChartKey(k=>k+1); };
 
   const stats=[
-    {label:'Avg. consumption',     value:11,suffix:' gal / 4 wks',note:'Last 90 days',       accent:false},
-    {label:'Current plan delivers',value:15,suffix:' gal / 4 wks',note:'Active subscription', accent:false},
-    {label:'Estimated surplus',    value:8, suffix:' gal / qtr',  note:'~2 extra gal/month',  accent:true},
+    {label:'Avg. consumption',     value:round1(S.avgConsumption),suffix:' gal / 4 wks',note:'Last 3 cycles',        accent:false},
+    {label:'Current plan delivers',value:S.current,               suffix:' gal / 4 wks',note:'Active subscription',   accent:false},
+    {label:'Estimated surplus',    value:round1(S.surplusQuarter),suffix:' gal / qtr',  note:`≈ ${round1(S.surplusCycle)} gal/mo · ${formatMoney(S.surplusValuePerQuarter)}/qtr`, accent:true},
   ];
 
   return(
@@ -563,31 +557,31 @@ function UsageSection(){
       <div ref={ref} style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:14,marginBottom:22}}>
         {stats.map((s,i)=>(
           <div key={s.label} style={{
-            background:'#fff',border:'1.5px solid #e4ddd3',borderRadius:18,padding:'20px 20px 16px',
+            background:'#fff',border:'1.5px solid #e6e8ec',borderRadius:18,padding:'20px 20px 16px',
             boxShadow:'0 2px 10px rgba(28,43,58,.04)',
             opacity:inView?1:0,transform:inView?'translateY(0)':'translateY(14px)',
             transition:`opacity .5s ease ${i*.12}s,transform .5s ease ${i*.12}s`,
           }}>
-            <p className="sans" style={{fontSize:12,color:'#aab4be',fontWeight:500,marginBottom:6}}>{s.label}</p>
+            <p className="sans" style={{fontSize:12,color:'#94a3b8',fontWeight:500,marginBottom:6}}>{s.label}</p>
             <p className="serif" style={{fontSize:28,fontWeight:700,color:s.accent?'#e8a020':'#1c2b3a',lineHeight:1.1}}>
               <CountUp target={s.value} suffix={s.suffix} inView={inView} duration={950+i*160}/>
             </p>
-            <p className="sans" style={{fontSize:11,color:'#c8d4dc',marginTop:4}}>{s.note}</p>
+            <p className="sans" style={{fontSize:11,color:'#cbd5e1',marginTop:4}}>{s.note}</p>
           </div>
         ))}
       </div>
 
       {/* Chart card with range tabs */}
-      <div style={{background:'#fff',border:'1.5px solid #e4ddd3',borderRadius:18,padding:'20px 18px',marginBottom:14,boxShadow:'0 2px 10px rgba(28,43,58,.04)'}}>
+      <div style={{background:'#fff',border:'1.5px solid #e6e8ec',borderRadius:18,padding:'20px 18px',marginBottom:14,boxShadow:'0 2px 10px rgba(28,43,58,.04)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
           <p className="sans" style={{fontSize:13,fontWeight:600,color:'#1c2b3a'}}>Delivered vs. Consumed</p>
           {/* Range tabs */}
-          <div style={{display:'flex',gap:4,background:'#f7f4ef',borderRadius:10,padding:3}}>
+          <div style={{display:'flex',gap:4,background:'#f8f9fb',borderRadius:10,padding:3}}>
             {['3M','6M','12M'].map(r=>(
               <button key={r} onClick={()=>switchRange(r)} className="sans" style={{
                 padding:'5px 12px',borderRadius:8,border:'none',cursor:'pointer',fontSize:12,fontWeight:600,
                 background:range===r?'#fff':'transparent',
-                color:range===r?'#1c2b3a':'#aab4be',
+                color:range===r?'#1c2b3a':'#94a3b8',
                 boxShadow:range===r?'0 1px 4px rgba(28,43,58,.1)':'none',
                 transition:'all .2s',
               }}>{r}</button>
@@ -599,10 +593,12 @@ function UsageSection(){
         </div>
       </div>
 
-      <div style={{background:'#fdf3e0',border:'1.5px solid rgba(232,160,32,.3)',borderRadius:16,padding:'16px 20px',display:'flex',gap:12,alignItems:'flex-start'}}>
-        <span style={{fontSize:22,flexShrink:0,lineHeight:1.3}}>🌡️</span>
-        <p className="sans" style={{fontSize:14,color:'#5a4530',lineHeight:1.72}}>
-          <strong>Seasonal context:</strong> Households like yours in the Midwest typically drop <strong>18% in winter</strong>. Your usage confirms this — and we're factoring it in.
+      <div style={{background:'#fdf3e0',border:'1px solid rgba(232,160,32,.28)',borderRadius:16,padding:'16px 20px',display:'flex',gap:13,alignItems:'flex-start'}}>
+        <span style={{display:'grid',placeItems:'center',width:28,height:28,borderRadius:8,background:'#fff',flexShrink:0,marginTop:1}}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 2.5C12 2.5 5 9.8 5 14.3a7 7 0 0014 0C19 9.8 12 2.5 12 2.5z" fill="#e8a020"/></svg>
+        </span>
+        <p className="sans" style={{fontSize:14,color:'#475569',lineHeight:1.72}}>
+          <strong>Seasonal context:</strong> Households like yours in the {account.region} typically drop <strong>{Math.round(account.seasonalProfile.holidayDipPct*100)}% in winter</strong>. Your usage confirms this — and we're factoring it in.
         </p>
       </div>
     </section>
@@ -611,14 +607,13 @@ function UsageSection(){
 
 /* ─── Recommendation Card ────────────────────────────────────────────────── */
 const REC_FALLBACK={
-  headline:'We think your order is a little too big.',
-  body:"Based on your last 3 months, you're using about 11 gallons every 4 weeks. Your current plan delivers 15. You're likely accumulating a small surplus — about 8 extra gallons per quarter quietly piling up.",
+  headline:'Your order is a little larger than you need.',
+  body:`Based on your last 3 cycles, you're using about ${round1(S.avgConsumption)} gallons every 4 weeks. Your current plan delivers ${S.current}. You're likely accumulating a small surplus — about ${round1(S.surplusQuarter)} extra gallons a quarter, roughly ${formatMoney(S.surplusValuePerQuarter)} of water quietly piling up.`,
 };
 
 function RecommendationCard({cardRef}){
   const [phase,setPhase]          =useState('idle');
-  const [sliderVal,setSliderVal]  =useState(12);
-  const [showConfetti,setConfetti]=useState(false);
+  const [sliderVal,setSliderVal]  =useState(S.recommended);
   const [toast,setToast]          =useState({visible:false,msg:''});
   const dismissToast=useCallback(()=>setToast(t=>({...t,visible:false})),[]);
 
@@ -649,22 +644,21 @@ function RecommendationCard({cardRef}){
   },[]);
 
   const handleAdjust=()=>{
-    setPhase('flipping');setConfetti(true);
-    setTimeout(()=>{ setPhase('adjusted'); setTimeout(()=>setConfetti(false),1100); },650);
+    setPhase('flipping');
+    setTimeout(()=>setPhase('adjusted'),650);
   };
   const handleKeep  =()=>setPhase('dismissed');
   const handleRemind=()=>{ setPhase('reminded'); setToast({visible:true,msg:"We'll surface this again on Nov 14."}); };
 
-  const isIdle     =phase==='idle'||phase==='reminded';
   const isFlipping =phase==='flipping';
   const isAdjusted =phase==='adjusted';
   const isDismissed=phase==='dismissed';
-  const savings    =(15-sliderVal)*8;
+  const savings    =Math.max(0,savingsPerCycle(S.current,sliderVal,pricing));
 
   return(
     <>
       <section ref={cardRef} style={{maxWidth:900,margin:'0 auto',padding:'8px 20px'}}>
-        <div className={`${isIdle||isFlipping?'rec-card-pulse':''} ${isFlipping?'rec-card-flip':''}`} style={{
+        <div className={isFlipping?'rec-card-flip':''} style={{
           background:isAdjusted?'#e6f9f0':'#fff',
           border:`2px solid ${isAdjusted?'#3dbb7a':'#e8a020'}`,
           borderRadius:24,padding:'clamp(22px,4vw,36px)',
@@ -672,7 +666,6 @@ function RecommendationCard({cardRef}){
           transition:'background .4s,border-color .4s,opacity .4s',
           opacity:isDismissed?.42:1,
         }}>
-          <Confetti active={showConfetti}/>
 
           {isAdjusted?(
             <div style={{textAlign:'center',padding:'12px 0',display:'flex',flexDirection:'column',alignItems:'center',gap:16}}>
@@ -680,14 +673,14 @@ function RecommendationCard({cardRef}){
               <h3 className="serif" style={{fontSize:'clamp(20px,3vw,28px)',fontWeight:700,color:'#1c2b3a'}}>Done. Your next delivery is adjusted.</h3>
               <p className="sans" style={{fontSize:15,color:'#3a6a50',lineHeight:1.72,maxWidth:400}}>
                 Changed to <strong style={{color:'#3dbb7a'}}>{sliderVal} gallons</strong> every 4 weeks.
-                {savings>0&&<> Saving you <strong style={{color:'#3dbb7a'}}>${savings}/month</strong>.</>}
+                {savings>0&&<> Saving you <strong style={{color:'#3dbb7a'}}>{formatMoney(savings)}/month</strong>.</>}
                 {' '}We'll keep learning and re-suggest if anything shifts.
               </p>
             </div>
           ):isDismissed?(
             <div style={{textAlign:'center',padding:'12px 0'}}>
-              <p className="serif" style={{fontSize:22,fontWeight:600,color:'#aab4be',marginBottom:8}}>Got it. No changes made.</p>
-              <p className="sans" style={{fontSize:14,color:'#c8d4dc'}}>We'll check back in 6 weeks to see if your usage has shifted.</p>
+              <p className="serif" style={{fontSize:22,fontWeight:600,color:'#94a3b8',marginBottom:8}}>Got it. No changes made.</p>
+              <p className="sans" style={{fontSize:14,color:'#cbd5e1'}}>We'll check back in 6 weeks to see if your usage has shifted.</p>
             </div>
           ):(
             <>
@@ -697,7 +690,7 @@ function RecommendationCard({cardRef}){
               <h2 className="serif" style={{fontSize:'clamp(22px,3.8vw,32px)',fontWeight:700,color:'#1c2b3a',lineHeight:1.22,marginBottom:14,opacity:aiState==='loading'?.55:1,transition:'opacity .35s'}}>
                 {ai.headline}
               </h2>
-              <p className="sans" style={{fontSize:15,color:'#4a5a6a',lineHeight:1.78,maxWidth:560,marginBottom:22,opacity:aiState==='loading'?.55:1,transition:'opacity .35s'}}>
+              <p className="sans" style={{fontSize:15,color:'#475569',lineHeight:1.78,maxWidth:560,marginBottom:22,opacity:aiState==='loading'?.55:1,transition:'opacity .35s'}}>
                 {ai.body}
               </p>
 
@@ -712,7 +705,7 @@ function RecommendationCard({cardRef}){
                       <path d="M5 8.5l2 2 4-4" stroke="#3dbb7a" strokeWidth="1.5" strokeLinecap="round"/>
                     </svg>
                     <p className="sans" style={{fontSize:13,color:'#3a6a50',fontWeight:500}}>
-                      You'd save <strong>${savings}/month</strong>. We'll keep watching and re-suggest if usage changes.
+                      You'd save <strong>{formatMoney(savings)}/month</strong>. We'll keep watching and re-suggest if usage changes.
                     </p>
                   </div>
                 )}
@@ -722,8 +715,8 @@ function RecommendationCard({cardRef}){
               <div style={{display:'flex',flexWrap:'wrap',gap:12}}>
                 {[
                   {label:`Adjust to ${sliderVal} gal`,fn:handleAdjust,s:{background:'#e8a020',color:'#fff',border:'none',boxShadow:'0 4px 16px rgba(232,160,32,.35)'}},
-                  {label:'Keep Current',              fn:handleKeep,  s:{background:'transparent',color:'#1c2b3a',border:'1.5px solid #e4ddd3'}},
-                  {label:'Remind Me in a Month',      fn:handleRemind,s:{background:'transparent',color:'#7a8a99',border:'1.5px solid #e4ddd3'}},
+                  {label:'Keep Current',              fn:handleKeep,  s:{background:'transparent',color:'#1c2b3a',border:'1.5px solid #e6e8ec'}},
+                  {label:'Remind Me in a Month',      fn:handleRemind,s:{background:'transparent',color:'#64748b',border:'1.5px solid #e6e8ec'}},
                 ].map(btn=>(
                   <button key={btn.label} onClick={btn.fn} className="sans" style={{...btn.s,borderRadius:12,padding:'11px 22px',fontSize:14,fontWeight:600,cursor:'pointer',transition:'transform .15s,opacity .15s'}}
                     onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.opacity='.88';}}
@@ -731,7 +724,7 @@ function RecommendationCard({cardRef}){
                   >{btn.label}</button>
                 ))}
               </div>
-              {phase==='reminded'&&<p className="sans" style={{fontSize:13,color:'#7a8a99',marginTop:12}}>✓ Reminder set for Nov 14. No changes to your current plan.</p>}
+              {phase==='reminded'&&<p className="sans" style={{fontSize:13,color:'#64748b',marginTop:12}}>✓ Reminder set for Nov 14. No changes to your current plan.</p>}
             </>
           )}
         </div>
@@ -749,15 +742,15 @@ function TrustTimeline({onPhaseClick}){
     {n:2,label:'Suggest',  status:'current',desc:'We offer a recommendation. You decide.'},
     {n:3,label:'Autopilot',status:'locked', desc:'We auto-adjust monthly. You approve once.',tooltip:'Click to see unlock progress'},
   ];
-  const iC=s=>s==='done'?'#3dbb7a':s==='current'?'#e8a020':'#c8d4dc';
-  const lC=s=>s==='done'?'#3dbb7a':s==='current'?'#e8a020':'#c8d4dc';
+  const iC=s=>s==='done'?'#3dbb7a':s==='current'?'#e8a020':'#cbd5e1';
+  const lC=s=>s==='done'?'#3dbb7a':s==='current'?'#e8a020':'#cbd5e1';
   return(
     <section style={{maxWidth:900,margin:'0 auto',padding:'32px 20px'}}>
       <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.13em',color:'#e8a020',marginBottom:6}}>How This Works</p>
       <h2 className="serif" style={{fontSize:'clamp(22px,4vw,30px)',fontWeight:700,color:'#1c2b3a',marginBottom:10}}>We earn autopilot.</h2>
-      <p className="sans" style={{fontSize:15,color:'#7a8a99',marginBottom:32}}>We don't assume it.</p>
+      <p className="sans" style={{fontSize:15,color:'#64748b',marginBottom:32}}>We don't assume it.</p>
       <div ref={ref} style={{position:'relative'}}>
-        <div style={{position:'absolute',top:27,left:'17%',right:'17%',height:3,background:'#e4ddd3',borderRadius:99,zIndex:0}}>
+        <div style={{position:'absolute',top:27,left:'17%',right:'17%',height:3,background:'#e6e8ec',borderRadius:99,zIndex:0}}>
           <div style={{height:'100%',background:'#e8a020',borderRadius:99,width:inView?'50%':'0%',transition:'width 1s ease .35s'}}/>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,position:'relative',zIndex:1}}>
@@ -784,7 +777,7 @@ function TrustTimeline({onPhaseClick}){
                 {p.status==='done'?'✓':p.status==='locked'?'🔒':p.n}
               </div>
               <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em',color:lC(p.status),marginBottom:6}}>Phase {p.n} — {p.label}</p>
-              <p className="sans" style={{fontSize:13,color:p.status==='locked'?'#c8d4dc':'#4a5a6a',lineHeight:1.65}}>{p.desc}</p>
+              <p className="sans" style={{fontSize:13,color:p.status==='locked'?'#cbd5e1':'#475569',lineHeight:1.65}}>{p.desc}</p>
               {p.status==='locked'&&<p className="sans" style={{fontSize:11,color:'#e8a020',fontStyle:'italic',marginTop:4,fontWeight:500}}>Tap to see progress →</p>}
             </div>
           ))}
@@ -799,6 +792,14 @@ function CohortSection(){
   const [ref,inView]=useInView(.15);
   const [expanded,setExpanded]=useState(null);
 
+  // The customer's own card is derived so it matches the rest of the page.
+  const youEntry={
+    id:0,icon:'🏠',label:'You',used:round1(S.avgConsumption),plan:S.current,status:'you',
+    trend:usageHistory.slice(-3).map((m)=>m.consumed),
+    desc:'Surplus growing month-over-month. Recommendation active.',
+  };
+  const peers=[...cohort.peers,youEntry];
+
   const sCfg={
     matched:{label:'Well-matched',bg:'#e6f9f0',color:'#2a8a5a',border:'rgba(61,187,122,.4)'},
     surplus:{label:'Slight surplus',bg:'#fff8e6',color:'#a07010',border:'rgba(232,160,32,.4)'},
@@ -806,13 +807,13 @@ function CohortSection(){
   };
 
   return(
-    <section style={{background:'#fff9f0',borderRadius:22,padding:'clamp(22px,4vw,36px)',maxWidth:900,margin:'0 auto'}}>
+    <section style={{background:'#f1f3f7',borderRadius:22,padding:'clamp(22px,4vw,36px)',maxWidth:900,margin:'0 auto'}}>
       <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.13em',color:'#e8a020',marginBottom:6}}>Households Like Yours</p>
-      <h2 className="serif" style={{fontSize:'clamp(20px,3.5vw,28px)',fontWeight:700,color:'#1c2b3a',marginBottom:6}}>Your cohort · Midwest · 2–3 person household</h2>
-      <p className="sans" style={{fontSize:13,color:'#aab4be',marginBottom:22}}>Click any card to see trend details</p>
+      <h2 className="serif" style={{fontSize:'clamp(20px,3.5vw,28px)',fontWeight:700,color:'#1c2b3a',marginBottom:6}}>Your cohort · {account.region} · {account.household}</h2>
+      <p className="sans" style={{fontSize:13,color:'#94a3b8',marginBottom:22}}>Click any card to see trend details</p>
 
       <div ref={ref} style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:14,marginBottom:22}}>
-        {COHORT_PEERS.map((c,i)=>{
+        {peers.map((c,i)=>{
           const cfg=sCfg[c.status];
           const isYou=c.id===0;
           const isOpen=expanded===c.id;
@@ -822,7 +823,7 @@ function CohortSection(){
               onClick={()=>setExpanded(isOpen?null:c.id)}
               style={{
                 background:isYou?'#fff0e6':'#fff',
-                border:`2px solid ${isOpen?(isYou?'rgba(210,80,30,.5)':'#e8a020'):(isYou?'rgba(210,80,30,.3)':'#e4ddd3')}`,
+                border:`2px solid ${isOpen?(isYou?'rgba(210,80,30,.5)':'#e8a020'):(isYou?'rgba(210,80,30,.3)':'#e6e8ec')}`,
                 borderRadius:18,padding:'18px 16px',cursor:'pointer',
                 boxShadow:isOpen?'0 6px 24px rgba(28,43,58,.1)':isYou?'0 4px 20px rgba(210,80,30,.1)':'0 2px 8px rgba(28,43,58,.04)',
                 opacity:inView?1:0,
@@ -830,15 +831,15 @@ function CohortSection(){
                 transition:`opacity .5s ease ${i*.1}s,transform .5s ease ${i*.1}s,border-color .2s,box-shadow .2s`,
               }}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-                <div style={{width:42,height:42,borderRadius:'50%',background:isYou?'rgba(210,80,30,.1)':'#f0ede8',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,marginBottom:10}}>
+                <div style={{width:42,height:42,borderRadius:'50%',background:isYou?'rgba(210,80,30,.1)':'#eef1f5',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,marginBottom:10}}>
                   {c.icon}
                 </div>
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{marginTop:2,transition:'transform .25s',transform:isOpen?'rotate(180deg)':'rotate(0deg)'}}>
-                  <path d="M2 4l5 6 5-6" stroke="#aab4be" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M2 4l5 6 5-6" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </div>
               <p className="sans" style={{fontSize:13,fontWeight:700,color:'#1c2b3a',marginBottom:2}}>{c.label}</p>
-              <p className="sans" style={{fontSize:12,color:'#aab4be',marginBottom:10}}>{c.used} gal used · {c.plan} gal plan</p>
+              <p className="sans" style={{fontSize:12,color:'#94a3b8',marginBottom:10}}>{c.used} gal used · {c.plan} gal plan</p>
               <span className="sans" style={{
                 fontSize:11,fontWeight:600,background:cfg.bg,color:cfg.color,
                 border:`1px solid ${cfg.border}`,padding:'3px 10px',borderRadius:99,display:'inline-block',
@@ -847,13 +848,13 @@ function CohortSection(){
 
               {/* Expandable detail */}
               <div className={`expand-panel ${isOpen?'open':'closed'}`}>
-                <div style={{paddingTop:14,marginTop:12,borderTop:'1px solid #e4ddd3'}}>
-                  <p className="sans" style={{fontSize:11,color:'#aab4be',marginBottom:6}}>3-month trend</p>
+                <div style={{paddingTop:14,marginTop:12,borderTop:'1px solid #e6e8ec'}}>
+                  <p className="sans" style={{fontSize:11,color:'#94a3b8',marginBottom:6}}>3-month trend</p>
                   <Sparkline data={c.trend} color={sparkColor}/>
                   <div style={{display:'flex',justifyContent:'space-between',marginTop:2}}>
-                    {['Aug','Sep','Oct'].map(m=><span key={m} className="sans" style={{fontSize:9,color:'#c8d4dc'}}>{m}</span>)}
+                    {RECENT_MONTHS.map(m=><span key={m} className="sans" style={{fontSize:9,color:'#cbd5e1'}}>{m}</span>)}
                   </div>
-                  <p className="sans" style={{fontSize:12,color:'#7a8a99',lineHeight:1.6,marginTop:8}}>{c.desc}</p>
+                  <p className="sans" style={{fontSize:12,color:'#64748b',lineHeight:1.6,marginTop:8}}>{c.desc}</p>
                 </div>
               </div>
             </div>
@@ -861,9 +862,9 @@ function CohortSection(){
         })}
       </div>
 
-      <p className="sans" style={{fontSize:14,color:'#5a4530',lineHeight:1.75,textAlign:'center'}}>
-        <strong>4 out of 5 households in your cohort have right-sized their order.</strong>
-        <br/>The ones who did churn <strong style={{color:'#e8a020'}}>3× less</strong>.
+      <p className="sans" style={{fontSize:14,color:'#475569',lineHeight:1.75,textAlign:'center'}}>
+        <strong>{cohort.rightSizedShare} households in your cohort have right-sized their order.</strong>
+        <br/>The ones who did churn <strong style={{color:'#e8a020'}}>{cohort.churnReduction} less</strong>.
       </p>
     </section>
   );
@@ -872,29 +873,33 @@ function CohortSection(){
 /* ─── Switching Cost ─────────────────────────────────────────────────────── */
 function SwitchingCostSection(){
   const [ref,inView]=useInView(.15);
+  const summerPct=Math.round(account.seasonalProfile.summerSurgePct*100);
+  const holidayPct=Math.round(account.seasonalProfile.holidayDipPct*100);
   const items=[
-    {icon:'📅',text:"You've been with ReadyRefresh 14 months."},
-    {icon:'☀️',text:'We know your summer surge (June–August: +22%).'},
-    {icon:'🎄',text:'We know your holiday dip (Dec: −15%).'},
-    {icon:'👥',text:'We know you skip when guests are staying over.'},
+    `You've been with ReadyRefresh ${S.tenureMonths} months.`,
+    `We know your summer surge (June–August: +${summerPct}%).`,
+    `We know your holiday dip (December: −${holidayPct}%).`,
+    'We know you skip when guests are staying over.',
   ];
   return(
     <section style={{maxWidth:900,margin:'0 auto',padding:'32px 20px'}}>
       <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.13em',color:'#e8a020',marginBottom:6}}>What You'd Lose</p>
-      <h2 className="serif" style={{fontSize:'clamp(20px,3.5vw,28px)',fontWeight:700,color:'#1c2b3a',marginBottom:28}}>14 months of learning your rhythm</h2>
+      <h2 className="serif" style={{fontSize:'clamp(20px,3.5vw,28px)',fontWeight:700,color:'#1c2b3a',marginBottom:28}}>{S.tenureMonths} months of learning your rhythm</h2>
       <div ref={ref}>
         {items.map((item,i)=>(
           <div key={i} style={{display:'flex',gap:16,alignItems:'flex-start',opacity:inView?1:0,transform:inView?'translateX(0)':'translateX(-16px)',transition:`opacity .45s ease ${i*.11}s,transform .45s ease ${i*.11}s`}}>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center',flexShrink:0,width:38}}>
-              <div style={{width:38,height:38,borderRadius:'50%',background:'#fff',border:'2px solid #e4ddd3',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>{item.icon}</div>
-              {i<items.length-1&&<div style={{width:2,flex:1,minHeight:28,background:'#e4ddd3',margin:'4px 0'}}/>}
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',flexShrink:0,width:34}}>
+              <div style={{width:34,height:34,borderRadius:'50%',background:'#fff',border:'1.5px solid #e6e8ec',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                <span style={{width:9,height:9,borderRadius:'50%',background:'#e8a020'}}/>
+              </div>
+              {i<items.length-1&&<div style={{width:2,flex:1,minHeight:28,background:'#e6e8ec',margin:'4px 0'}}/>}
             </div>
-            <p className="sans" style={{fontSize:15,color:'#4a5a6a',lineHeight:1.72,paddingBottom:i<items.length-1?18:6,paddingTop:8}}>{item.text}</p>
+            <p className="sans" style={{fontSize:15,color:'#475569',lineHeight:1.72,paddingBottom:i<items.length-1?18:6,paddingTop:6}}>{item}</p>
           </div>
         ))}
       </div>
       <div style={{marginTop:22,background:'#1c2b3a',borderRadius:18,padding:'22px 26px'}}>
-        <p className="serif" style={{fontSize:'clamp(16px,2.6vw,20px)',fontWeight:600,color:'#f7f4ef',lineHeight:1.65}}>
+        <p className="serif" style={{fontSize:'clamp(16px,2.6vw,20px)',fontWeight:600,color:'#f8f9fb',lineHeight:1.65}}>
           Starting over with a competitor means guessing again — for months.
           <span style={{color:'#e8a020'}}> The personalization is the product.</span>
         </p>
@@ -906,34 +911,34 @@ function SwitchingCostSection(){
 /* ─── Footer ─────────────────────────────────────────────────────────────── */
 function FooterSection({onManageNotif,onSkipDelivery}){
   return(
-    <footer style={{maxWidth:900,margin:'0 auto',padding:'20px 20px 40px',borderTop:'1.5px solid #e4ddd3'}}>
-      <div style={{background:'#fff',border:'1.5px solid #e4ddd3',borderRadius:18,padding:'20px 22px',marginBottom:22,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:16,alignItems:'end'}}>
+    <footer style={{maxWidth:900,margin:'0 auto',padding:'20px 20px 40px',borderTop:'1.5px solid #e6e8ec'}}>
+      <div style={{background:'#fff',border:'1.5px solid #e6e8ec',borderRadius:18,padding:'20px 22px',marginBottom:22,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:16,alignItems:'end'}}>
         {[
-          {label:'Current Plan', value:'15 gal / 4 wks',accent:false},
-          {label:'Next Delivery',value:'Nov 8, 2024',   accent:false},
-          {label:'Monthly Cost', value:'$72 / mo',      accent:true},
+          {label:'Current Plan', value:`${account.currentPlanGallons} gal / ${account.cycleWeeks} wks`,accent:false},
+          {label:'Next Delivery',value:formatDate(account.nextDeliveryDate),                            accent:false},
+          {label:'Monthly Cost', value:`${formatMoney(S.currentCost)} / mo`,                            accent:true},
         ].map(item=>(
           <div key={item.label}>
-            <p className="sans" style={{fontSize:11,color:'#aab4be',textTransform:'uppercase',letterSpacing:'.1em',fontWeight:600,marginBottom:4}}>{item.label}</p>
+            <p className="sans" style={{fontSize:11,color:'#94a3b8',textTransform:'uppercase',letterSpacing:'.1em',fontWeight:600,marginBottom:4}}>{item.label}</p>
             <p className="serif" style={{fontSize:20,fontWeight:700,color:item.accent?'#e8a020':'#1c2b3a'}}>{item.value}</p>
           </div>
         ))}
         {/* Action buttons */}
         <div style={{display:'flex',flexDirection:'column',gap:8}}>
-          <button onClick={onManageNotif} className="sans" style={{background:'none',border:'1.5px solid #e4ddd3',borderRadius:10,padding:'8px 14px',fontSize:13,color:'#7a8a99',cursor:'pointer',fontWeight:500,transition:'border-color .15s,color .15s'}}
+          <button onClick={onManageNotif} className="sans" style={{background:'none',border:'1.5px solid #e6e8ec',borderRadius:10,padding:'8px 14px',fontSize:13,color:'#64748b',cursor:'pointer',fontWeight:500,transition:'border-color .15s,color .15s'}}
             onMouseEnter={e=>{e.currentTarget.style.borderColor='#1c2b3a';e.currentTarget.style.color='#1c2b3a';}}
-            onMouseLeave={e=>{e.currentTarget.style.borderColor='#e4ddd3';e.currentTarget.style.color='#7a8a99';}}>
-            🔔 Manage Notifications
+            onMouseLeave={e=>{e.currentTarget.style.borderColor='#e6e8ec';e.currentTarget.style.color='#64748b';}}>
+            Manage Notifications
           </button>
-          <button onClick={onSkipDelivery} className="sans" style={{background:'none',border:'1.5px solid #e4ddd3',borderRadius:10,padding:'8px 14px',fontSize:13,color:'#7a8a99',cursor:'pointer',fontWeight:500,transition:'border-color .15s,color .15s'}}
+          <button onClick={onSkipDelivery} className="sans" style={{background:'none',border:'1.5px solid #e6e8ec',borderRadius:10,padding:'8px 14px',fontSize:13,color:'#64748b',cursor:'pointer',fontWeight:500,transition:'border-color .15s,color .15s'}}
             onMouseEnter={e=>{e.currentTarget.style.borderColor='#1c2b3a';e.currentTarget.style.color='#1c2b3a';}}
-            onMouseLeave={e=>{e.currentTarget.style.borderColor='#e4ddd3';e.currentTarget.style.color='#7a8a99';}}>
-            📦 Skip Next Delivery
+            onMouseLeave={e=>{e.currentTarget.style.borderColor='#e6e8ec';e.currentTarget.style.color='#64748b';}}>
+            Skip Next Delivery
           </button>
         </div>
       </div>
-      <p className="serif" style={{fontSize:15,color:'#aab4be',textAlign:'center',lineHeight:1.8,maxWidth:460,margin:'0 auto 14px'}}>"Subscription products should learn your rhythm.<br/>Not require you to manage it."</p>
-      <p className="sans" style={{fontSize:12,color:'#c8d4dc',textAlign:'center'}}>© 2024 ReadyRefresh · All rights reserved</p>
+      <p className="serif" style={{fontSize:15,color:'#94a3b8',textAlign:'center',lineHeight:1.8,maxWidth:460,margin:'0 auto 14px'}}>"Subscription products should learn your rhythm.<br/>Not require you to manage it."</p>
+      <p className="sans" style={{fontSize:12,color:'#cbd5e1',textAlign:'center'}}>© {new Date(`${account.asOfDate}T00:00:00`).getFullYear()} ReadyRefresh · All rights reserved</p>
     </footer>
   );
 }
@@ -950,13 +955,13 @@ export default function App(){
   return(
     <>
       <style>{GLOBAL_CSS}</style>
-      <div style={{background:'#f7f4ef',minHeight:'100vh',fontFamily:'Inter,sans-serif',color:'#1c2b3a'}}>
-        <nav style={{position:'sticky',top:0,zIndex:50,background:'rgba(247,244,239,.92)',backdropFilter:'blur(12px)',borderBottom:'1px solid #e4ddd3',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px'}}>
+      <div style={{background:'#f8f9fb',minHeight:'100vh',fontFamily:'Inter,sans-serif',color:'#1c2b3a'}}>
+        <nav style={{position:'sticky',top:0,zIndex:50,background:'rgba(248,249,251,.9)',backdropFilter:'blur(12px)',borderBottom:'1px solid #e6e8ec',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px'}}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
             <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 2C11 2 4 10 4 14.5C4 18.09 7.13 21 11 21C14.87 21 18 18.09 18 14.5C18 10 11 2 11 2Z" fill="#e8a020"/></svg>
             <span className="serif" style={{fontSize:18,fontWeight:700,color:'#1c2b3a'}}>ReadyRefresh</span>
           </div>
-          <span className="sans" style={{fontSize:12,color:'#aab4be',fontWeight:500}}>Smart Subscription · Marcus</span>
+          <span className="sans" style={{fontSize:12,color:'#94a3b8',fontWeight:500}}>Smart Subscription · {account.greetingName}</span>
         </nav>
 
         <main>

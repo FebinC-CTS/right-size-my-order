@@ -41,7 +41,12 @@ This feature catches the surplus first. It visualizes the gap, benchmarks the cu
 ## How the AI Works
 
 ```
- Customer usage data        delivered vs. consumed · 3-month trend · current plan
+ Account + usage data       delivered vs. consumed · 12-cycle history · pricing
+ (src/data/account.js)
+        │
+        ▼
+ Right-size engine          recent-average consumption · surplus · cost ·
+ (src/lib/calc.js)          savings · recommended plan  (one source of truth)
         │
         ▼
  React + Vite SPA           usage chart · peer cohort · plan slider ·
@@ -59,7 +64,7 @@ This feature catches the surplus first. It visualizes the gap, benchmarks the cu
 ```
 
 - **Model:** Claude Sonnet 4.6 (`claude-sonnet-4-6`).
-- **Grounded, not fabricated:** the prompt supplies the real usage figures and instructs the model to frame *only* those numbers — never to invent data.
+- **Grounded, not fabricated:** the prompt is built at runtime from the same derived figures the UI shows (`src/lib/calc.js`), so the AI copy, the stat cards, the chart, and the plan slider can never disagree. The model frames *only* those numbers — it never invents data.
 - **Secure key handling:** all requests route through a server-side proxy; the API key is never shipped to the client.
 - **Resilient:** if the key is missing or a call fails, the card falls back to the original static copy so the demo never breaks.
 
@@ -118,7 +123,12 @@ npm run preview
 ├── src/
 │   ├── App.jsx          The single-page experience — charts, slider,
 │   │                    recommendation card, trust timeline
+│   ├── data/
+│   │   └── account.js   Single source of truth — account, pricing, and the
+│   │                    12-cycle delivered-vs-consumed usage history
 │   ├── lib/
+│   │   ├── calc.js      Pure right-size engine — averages, surplus, costs,
+│   │   │                savings, recommended plan (every figure derives here)
 │   │   └── claude.js    Anthropic client — complete() + tolerant JSON parser
 │   └── main.jsx
 ├── vite.config.js       Vite config + server-side Anthropic proxy
@@ -131,7 +141,7 @@ The Anthropic API key lives only in `.env.local` and is injected server-side by 
 
 ## Disclaimer
 
-All usage figures, peer cohorts, and pricing in this repository are **fabricated for demonstration purposes**. No real customer data is used.
+All usage figures, peer cohorts, and pricing in this repository are **illustrative and fabricated for demonstration purposes** — chosen to be realistic (≈ $1.99/gal water + a flat delivery fee, ReadyRefresh-style) but they are not real customer data. In production, `consumed` would come from the consumption signal (returned-bottle weight at pickup and/or smart-dispenser telemetry) and pricing from the billing platform; everything else in `src/lib/calc.js` is already derived.
 
 ---
 
