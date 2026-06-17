@@ -61,27 +61,7 @@ export const usageHistory = [
   { month: 'Oct', delivered: 15, consumed: 11.0 },
 ];
 
-// Peer households in the same cohort (region + household size). The customer's
-// own ("You") card is built at render time from the derived figures so it
-// always matches the rest of the page.
+// Social-proof stat for the customer's cohort (region + household size).
 export const cohort = {
-  peers: [
-    {
-      id: 1, icon: '🏡', label: 'Household A', used: 10.5, plan: 12,
-      status: 'matched', trend: [10.8, 10.2, 10.5],
-      desc: 'Right-sized 6 months ago. Stable. Churn risk: low.',
-    },
-    {
-      id: 2, icon: '🏘️', label: 'Household B', used: 13.0, plan: 15,
-      status: 'surplus', trend: [12.5, 13.2, 13.0],
-      desc: 'Slight surplus 2 months running. Suggestion pending.',
-    },
-    {
-      id: 3, icon: '🏗️', label: 'Household C', used: 11.8, plan: 12,
-      status: 'matched', trend: [11.5, 12.0, 11.8],
-      desc: 'Well-matched since spring. No action needed.',
-    },
-  ],
   rightSizedShare: '4 out of 5',
-  churnReduction: '3×',
 };

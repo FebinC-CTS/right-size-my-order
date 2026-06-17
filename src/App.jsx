@@ -49,7 +49,8 @@ const GLOBAL_CSS = `
 
 /* ── Modal / drawer ── */
 @keyframes overlay-fade{from{opacity:0}to{opacity:1}}
-@keyframes modal-in    {from{opacity:0;transform:scale(.93) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes modal-in    {from{opacity:0;transform:translate(-50%,-46%) scale(.93)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+@keyframes modal-pop   {from{opacity:0;transform:scale(.94) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
 @keyframes drawer-up   {from{transform:translateY(100%)}to{transform:translateY(0)}}
 
 .rec-card-flip {animation:flip-card .65s ease-in-out forwards;}
@@ -89,7 +90,6 @@ const RANGES = {
   '6M': CHART_ALL.slice(-6),
   '12M': CHART_ALL,
 };
-const RECENT_MONTHS = usageHistory.slice(-3).map((m) => m.month);
 
 /* ─── Hooks ──────────────────────────────────────────────────────────────── */
 function useInView(threshold=0.2){
@@ -135,18 +135,6 @@ function Toggle({on,onToggle,label,sub}){
   );
 }
 
-/* ─── Sparkline ──────────────────────────────────────────────────────────── */
-function Sparkline({data,color='#e8a020'}){
-  const W=100,H=36,min=Math.min(...data),max=Math.max(...data),range=max-min||1;
-  const pts=data.map((v,i)=>`${(i/(data.length-1))*W},${H-((v-min)/range)*(H-8)-4}`).join(' ');
-  return(
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-      {data.map((v,i)=><circle key={i} cx={(i/(data.length-1))*W} cy={H-((v-min)/range)*(H-8)-4} r="3.5" fill={color}/>)}
-    </svg>
-  );
-}
-
 /* ─── BarChart with hover tooltips + range prop ──────────────────────────── */
 function BarChart({inView,data}){
   const W=560,H=200,pad={t:20,r:16,b:36,l:28};
@@ -162,15 +150,16 @@ function BarChart({inView,data}){
     const r=containerRef.current.getBoundingClientRect();
     setTip({v:true,x:e.clientX-r.left,y:e.clientY-r.top,d});
   };
-  const onMove=(e,d)=>{
+  const onMove=(e)=>{
     if(!containerRef.current) return;
     const r=containerRef.current.getBoundingClientRect();
     setTip(t=>({...t,x:e.clientX-r.left,y:e.clientY-r.top}));
   };
   const onLeave=()=>setTip(t=>({...t,v:false}));
 
-  const showGapCallout=data.length>=6;
   const gapIdx=data.findIndex(d=>d.month==='Aug');
+  const showGapCallout=data.length>=6 && gapIdx>=0;
+  const gapX=pad.l+gapIdx*gW+gW/2;
 
   return(
     <div ref={containerRef} style={{overflowX:'auto',position:'relative'}}>
@@ -183,8 +172,10 @@ function BarChart({inView,data}){
         }}>
           <p style={{fontWeight:700,marginBottom:4,color:'#f8f9fb'}}>{tip.d.month}</p>
           <p style={{color:'#c8d9e8',marginBottom:2}}>Delivered: <strong>{tip.d.delivered} gal</strong></p>
-          <p style={{color:'#e8a020',marginBottom:2}}>Consumed: <strong>{tip.d.consumed} gal</strong></p>
-          <p style={{color:'#3dbb7a'}}>Surplus: <strong>{(tip.d.delivered-tip.d.consumed).toFixed(1)} gal</strong></p>
+          <p style={{color:'#7ee0aa',marginBottom:2}}>Consumed: <strong>{tip.d.consumed} gal</strong></p>
+          {(tip.d.delivered-tip.d.consumed)>=0
+            ? <p style={{color:'#f7c56e'}}>Surplus: <strong>{(tip.d.delivered-tip.d.consumed).toFixed(1)} gal</strong></p>
+            : <p style={{color:'#f0a080'}}>Over plan: <strong>{(tip.d.consumed-tip.d.delivered).toFixed(1)} gal</strong></p>}
           <div style={{position:'absolute',bottom:-5,left:'50%',transform:'translateX(-50%)',width:10,height:6,background:'#1c2b3a',clipPath:'polygon(50% 100%,0 0,100% 0)'}}/>
         </div>
       )}
@@ -196,14 +187,14 @@ function BarChart({inView,data}){
           </g>
         ))}
         {data.map((d,i)=>{
-          const cx=pad.l+i*gW+gW/2,delay=i*0.09,isLate=d.consumed<13;
+          const cx=pad.l+i*gW+gW/2,delay=i*0.09;
           return(
             <g key={d.month} style={{cursor:'crosshair'}}
-              onMouseEnter={e=>onEnter(e,d)} onMouseMove={e=>onMove(e,d)} onMouseLeave={onLeave}>
+              onMouseEnter={e=>onEnter(e,d)} onMouseMove={e=>onMove(e)} onMouseLeave={onLeave}>
               <rect x={cx-bW-gap/2} y={y(d.delivered)} width={bW} height={yH(d.delivered)} rx="2" fill="#c8d9e8"
                 style={{transformOrigin:`${cx}px ${y(0)}px`,transform:inView?'scaleY(1)':'scaleY(0)',transition:`transform .6s cubic-bezier(.34,1.4,.64,1) ${delay}s`}}/>
               <rect x={cx+gap/2} y={y(d.consumed)} width={bW} height={yH(d.consumed)} rx="2"
-                fill={isLate?'#e8a020':'#3dbb7a'} opacity={isLate?.75:.8}
+                fill="#3dbb7a" opacity={.85}
                 style={{transformOrigin:`${cx}px ${y(0)}px`,transform:inView?'scaleY(1)':'scaleY(0)',transition:`transform .6s cubic-bezier(.34,1.4,.64,1) ${delay+.05}s`}}/>
               {/* Hover hit area */}
               <rect x={cx-gW/2} y={pad.t} width={gW} height={cH} fill="transparent"/>
@@ -213,8 +204,8 @@ function BarChart({inView,data}){
         })}
         {inView&&showGapCallout&&(
           <g style={{animation:'fade-up .5s ease .85s both'}}>
-            <line x1={data.length>=6?370:200} y1={pad.t+18} x2={W-pad.r} y2={pad.t+18} stroke="#e8a020" strokeWidth="1.5" strokeDasharray="4 3"/>
-            <text x={data.length>=6?374:204} y={pad.t+13} fontSize="10" fill="#e8a020" fontWeight="600">Gap growing since Aug</text>
+            <line x1={gapX} y1={pad.t+18} x2={W-pad.r} y2={pad.t+18} stroke="#e8a020" strokeWidth="1.5" strokeDasharray="4 3"/>
+            <text x={gapX} y={pad.t+13} fontSize="10" fill="#e8a020" fontWeight="600" textAnchor={gapIdx>data.length-3?'end':'start'}>Gap growing since Aug</text>
           </g>
         )}
         <rect x={pad.l} y={H-10} width={10} height={8} rx="2" fill="#c8d9e8"/>
@@ -445,7 +436,7 @@ function SkipModal({open,onClose}){
 }
 
 /* ─── Phase Unlock Modal ─────────────────────────────────────────────────── */
-function PhaseModal({open,onClose,onScrollToRec}){
+function PhaseModal({open,onClose,onAccept}){
   if(!open) return null;
   const perks=[
     'Auto-adjusts your order every 4 weeks',
@@ -454,13 +445,16 @@ function PhaseModal({open,onClose,onScrollToRec}){
     'Sends a heads-up before every change',
   ];
   return(
-    <>
-      <Overlay onClick={onClose}/>
-      <div style={{
-        position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',
+    <div onClick={onClose} style={{
+      position:'fixed',inset:0,zIndex:200,background:'rgba(28,43,58,.5)',
+      display:'flex',alignItems:'center',justifyContent:'center',padding:20,
+      animation:'overlay-fade .25s ease forwards',
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
         background:'#fff',borderRadius:24,padding:'28px 28px 24px',
-        width:'min(440px,90vw)',zIndex:201,boxShadow:'0 20px 60px rgba(28,43,58,.22)',
-        animation:'modal-in .28s ease forwards',
+        width:'min(440px,90vw)',maxHeight:'90vh',overflowY:'auto',
+        boxShadow:'0 20px 60px rgba(28,43,58,.22)',
+        animation:'modal-pop .28s ease forwards',
       }}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:18}}>
           <div>
@@ -493,7 +487,7 @@ function PhaseModal({open,onClose,onScrollToRec}){
         ))}
 
         <div style={{display:'flex',gap:10,marginTop:20}}>
-          <button onClick={()=>{onClose();onScrollToRec();}} className="sans" style={{flex:1,background:'#e8a020',color:'#fff',border:'none',borderRadius:14,padding:'13px',fontSize:14,fontWeight:600,cursor:'pointer'}}>
+          <button onClick={onAccept} className="sans" style={{flex:1,background:'#e8a020',color:'#fff',border:'none',borderRadius:14,padding:'13px',fontSize:14,fontWeight:600,cursor:'pointer'}}>
             Accept Today's Suggestion
           </button>
           <button onClick={onClose} className="sans" style={{background:'transparent',border:'1.5px solid #e6e8ec',borderRadius:14,padding:'13px 16px',fontSize:14,cursor:'pointer',color:'#64748b'}}>
@@ -501,7 +495,7 @@ function PhaseModal({open,onClose,onScrollToRec}){
           </button>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -611,7 +605,7 @@ const REC_FALLBACK={
   body:`Based on your last 3 cycles, you're using about ${round1(S.avgConsumption)} gallons every 4 weeks. Your current plan delivers ${S.current}. You're likely accumulating a small surplus — about ${round1(S.surplusQuarter)} extra gallons a quarter, roughly ${formatMoney(S.surplusValuePerQuarter)} of water quietly piling up.`,
 };
 
-function RecommendationCard({cardRef}){
+function RecommendationCard({cardRef,acceptRef}){
   const [phase,setPhase]          =useState('idle');
   const [sliderVal,setSliderVal]  =useState(S.recommended);
   const [toast,setToast]          =useState({visible:false,msg:''});
@@ -649,6 +643,19 @@ function RecommendationCard({cardRef}){
   };
   const handleKeep  =()=>setPhase('dismissed');
   const handleRemind=()=>{ setPhase('reminded'); setToast({visible:true,msg:"We'll surface this again on Nov 14."}); };
+
+  // Accept-from-dialog: snap to the recommended plan, then run the adjust flow.
+  // Exposed via acceptRef so the "Unlock Autopilot" dialog can fire it.
+  const acceptRecommended=useCallback(()=>{
+    setSliderVal(S.recommended);
+    setPhase('flipping');
+    setTimeout(()=>setPhase('adjusted'),650);
+  },[]);
+  useEffect(()=>{
+    if(!acceptRef) return undefined;
+    acceptRef.current=acceptRecommended;
+    return ()=>{ acceptRef.current=null; };
+  },[acceptRef,acceptRecommended]);
 
   const isFlipping =phase==='flipping';
   const isAdjusted =phase==='adjusted';
@@ -787,85 +794,30 @@ function TrustTimeline({onPhaseClick}){
   );
 }
 
-/* ─── Cohort Comparison ──────────────────────────────────────────────────── */
+/* ─── Cohort Social Proof ────────────────────────────────────────────────── */
 function CohortSection(){
-  const [ref,inView]=useInView(.15);
-  const [expanded,setExpanded]=useState(null);
-
-  // The customer's own card is derived so it matches the rest of the page.
-  const youEntry={
-    id:0,icon:'🏠',label:'You',used:round1(S.avgConsumption),plan:S.current,status:'you',
-    trend:usageHistory.slice(-3).map((m)=>m.consumed),
-    desc:'Surplus growing month-over-month. Recommendation active.',
-  };
-  const peers=[...cohort.peers,youEntry];
-
-  const sCfg={
-    matched:{label:'Well-matched',bg:'#e6f9f0',color:'#2a8a5a',border:'rgba(61,187,122,.4)'},
-    surplus:{label:'Slight surplus',bg:'#fff8e6',color:'#a07010',border:'rgba(232,160,32,.4)'},
-    you:    {label:'⚠ Surplus',    bg:'#fff0e6',color:'#c05020',border:'rgba(210,80,30,.4)'},
-  };
-
+  const [ref,inView]=useInView(.2);
   return(
-    <section style={{background:'#f1f3f7',borderRadius:22,padding:'clamp(22px,4vw,36px)',maxWidth:900,margin:'0 auto'}}>
-      <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.13em',color:'#e8a020',marginBottom:6}}>Households Like Yours</p>
-      <h2 className="serif" style={{fontSize:'clamp(20px,3.5vw,28px)',fontWeight:700,color:'#1c2b3a',marginBottom:6}}>Your cohort · {account.region} · {account.household}</h2>
-      <p className="sans" style={{fontSize:13,color:'#94a3b8',marginBottom:22}}>Click any card to see trend details</p>
-
-      <div ref={ref} style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:14,marginBottom:22}}>
-        {peers.map((c,i)=>{
-          const cfg=sCfg[c.status];
-          const isYou=c.id===0;
-          const isOpen=expanded===c.id;
-          const sparkColor=c.status==='matched'?'#3dbb7a':c.status==='surplus'?'#e8a020':'#d05020';
-          return(
-            <div key={c.id}
-              onClick={()=>setExpanded(isOpen?null:c.id)}
-              style={{
-                background:isYou?'#fff0e6':'#fff',
-                border:`2px solid ${isOpen?(isYou?'rgba(210,80,30,.5)':'#e8a020'):(isYou?'rgba(210,80,30,.3)':'#e6e8ec')}`,
-                borderRadius:18,padding:'18px 16px',cursor:'pointer',
-                boxShadow:isOpen?'0 6px 24px rgba(28,43,58,.1)':isYou?'0 4px 20px rgba(210,80,30,.1)':'0 2px 8px rgba(28,43,58,.04)',
-                opacity:inView?1:0,
-                transform:inView?'scale(1) translateY(0)':'scale(.93) translateY(12px)',
-                transition:`opacity .5s ease ${i*.1}s,transform .5s ease ${i*.1}s,border-color .2s,box-shadow .2s`,
-              }}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-                <div style={{width:42,height:42,borderRadius:'50%',background:isYou?'rgba(210,80,30,.1)':'#eef1f5',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,marginBottom:10}}>
-                  {c.icon}
-                </div>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{marginTop:2,transition:'transform .25s',transform:isOpen?'rotate(180deg)':'rotate(0deg)'}}>
-                  <path d="M2 4l5 6 5-6" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </div>
-              <p className="sans" style={{fontSize:13,fontWeight:700,color:'#1c2b3a',marginBottom:2}}>{c.label}</p>
-              <p className="sans" style={{fontSize:12,color:'#94a3b8',marginBottom:10}}>{c.used} gal used · {c.plan} gal plan</p>
-              <span className="sans" style={{
-                fontSize:11,fontWeight:600,background:cfg.bg,color:cfg.color,
-                border:`1px solid ${cfg.border}`,padding:'3px 10px',borderRadius:99,display:'inline-block',
-                animation:inView?`shimmer-in .4s ease ${i*.1+.35}s both`:'none',
-              }}>{cfg.label}</span>
-
-              {/* Expandable detail */}
-              <div className={`expand-panel ${isOpen?'open':'closed'}`}>
-                <div style={{paddingTop:14,marginTop:12,borderTop:'1px solid #e6e8ec'}}>
-                  <p className="sans" style={{fontSize:11,color:'#94a3b8',marginBottom:6}}>3-month trend</p>
-                  <Sparkline data={c.trend} color={sparkColor}/>
-                  <div style={{display:'flex',justifyContent:'space-between',marginTop:2}}>
-                    {RECENT_MONTHS.map(m=><span key={m} className="sans" style={{fontSize:9,color:'#cbd5e1'}}>{m}</span>)}
-                  </div>
-                  <p className="sans" style={{fontSize:12,color:'#64748b',lineHeight:1.6,marginTop:8}}>{c.desc}</p>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+    <section style={{maxWidth:900,margin:'0 auto',padding:'32px 20px'}}>
+      <div ref={ref} style={{
+        background:'#fff',border:'1px solid #e6e8ec',borderRadius:18,
+        padding:'clamp(20px,4vw,26px)',display:'flex',gap:16,alignItems:'center',
+        boxShadow:'0 2px 10px rgba(28,43,58,.04)',
+        opacity:inView?1:0,transform:inView?'translateY(0)':'translateY(12px)',
+        transition:'opacity .5s ease,transform .5s ease',
+      }}>
+        <span style={{display:'grid',placeItems:'center',width:46,height:46,borderRadius:14,background:'#fdf3e0',flexShrink:0}}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M3 11l9-7 9 7M5 10v9h5v-5h4v5h5v-9" stroke="#e8a020" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </span>
+        <div>
+          <p className="sans" style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.13em',color:'#e8a020',marginBottom:4}}>Households like yours</p>
+          <p className="sans" style={{fontSize:'clamp(15px,2.4vw,17px)',color:'#1c2b3a',lineHeight:1.6,fontWeight:500}}>
+            <strong>{cohort.rightSizedShare} households</strong> in your {account.region} cohort have already adjusted to a plan that fits — paying only for the water they actually use.
+          </p>
+        </div>
       </div>
-
-      <p className="sans" style={{fontSize:14,color:'#475569',lineHeight:1.75,textAlign:'center'}}>
-        <strong>{cohort.rightSizedShare} households in your cohort have right-sized their order.</strong>
-        <br/>The ones who did churn <strong style={{color:'#e8a020'}}>{cohort.churnReduction} less</strong>.
-      </p>
     </section>
   );
 }
@@ -951,6 +903,13 @@ export default function App(){
   const [notifOpen, setNotifOpen] =useState(false);
   const [skipOpen,  setSkipOpen]  =useState(false);
   const [phaseOpen, setPhaseOpen] =useState(false);
+  const acceptRef=useRef(null);
+
+  const handleAcceptSuggestion=useCallback(()=>{
+    setPhaseOpen(false);
+    acceptRef.current?.();
+    scrollToRec();
+  },[scrollToRec]);
 
   return(
     <>
@@ -967,7 +926,7 @@ export default function App(){
         <main>
           <HeroSection onScrollToRec={scrollToRec}/>
           <UsageSection/>
-          <RecommendationCard cardRef={recRef}/>
+          <RecommendationCard cardRef={recRef} acceptRef={acceptRef}/>
           <div style={{height:12}}/>
           <TrustTimeline onPhaseClick={()=>setPhaseOpen(true)}/>
           <div style={{padding:'0 20px',maxWidth:940,margin:'0 auto'}}>
@@ -985,7 +944,7 @@ export default function App(){
       {/* Global overlays */}
       <NotifDrawer   open={notifOpen} onClose={()=>setNotifOpen(false)}/>
       <SkipModal     open={skipOpen}  onClose={()=>setSkipOpen(false)}/>
-      <PhaseModal    open={phaseOpen} onClose={()=>setPhaseOpen(false)} onScrollToRec={()=>{setPhaseOpen(false);scrollToRec();}}/>
+      <PhaseModal    open={phaseOpen} onClose={()=>setPhaseOpen(false)} onAccept={handleAcceptSuggestion}/>
     </>
   );
 }
